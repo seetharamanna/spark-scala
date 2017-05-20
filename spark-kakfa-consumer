@@ -1,4 +1,55 @@
 
+
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.rdd.RDD
+import org.apache.log4j.Logger
+import org.apache.spark.streaming.StreamingContext
+import org.apache.spark.streaming.Seconds
+import org.apache.spark.streaming.kafka.KafkaUtils
+import kafka.serializer.StringDecoder
+import org.apache.spark.serializer.{KryoSerializer, KryoRegistrator}
+
+//  case class LogRecord( clientIp: String, clientIdentity: String, user: String, dateTime: String, request:String,statusCode:Int, bytesSent:Long, referer:String, userAgent:String )
+val PATTERN = """^(\S+) (\S+) (\S+) \[([\w:/]+\s[+\-]\d{4})\] "(\S+) (\S+) (\S+)" (\d{3}) (\S+) "(\S+)" "([^"]*)"""".r
+case object ParseFunction {
+        def parseLogLine(log: String): String = {
+          var retstring:String=null
+          try {
+            val res = PATTERN.findFirstMatchIn(log)
+     
+            if (res.isEmpty) {
+              println("Rejected Log Line: " + log)
+              retstring="Empty"
+            }
+            else {
+              val m = res.get
+              retstring=m.group(1)
+              }
+            }
+          catch
+          {
+            case e: Exception =>
+              println("Exception on line:" + log + ":" + e.getMessage);
+              retstring="Empty"
+          }
+         retstring
+        }
+}
+@transient val ssc=new StreamingContext(sc,Seconds(10))
+ssc.checkpoint("checkpoint-directory-consumer")
+@transient val kafkaStream= KafkaUtils.createDirectStream[String,String,StringDecoder,StringDecoder](ssc,Map("metadata.broker.list" -> "localhost:9092" ),"log".split(",").toSet)
+val numInputMessages = ssc.sparkContext.accumulator(0L, "Kafka messages consumed")
+val numOutputMessages = ssc.sparkContext.accumulator(0L, "Kafka messages processed")
+@transient val logfileRDD=kafkaStream.map(_._2).map(ParseFunction.parseLogLine)
+val logfileCnt=logfileRDD.countByValueAndWindow(Seconds(60),Seconds(30))
+//logfileCnt.filter{case (a,v) => v>30}.foreachRDD{rdd => { numOutputMessages+=1
+//if(!rdd.partitions.isEmpty) rdd.saveAsTextFile("/user/cloudera/ddos/result_test") }}
+logfileCnt.filter{case (a,v) => v>30}.saveAsTextFiles("/user/cloudera/ddos/results/result","part")
+ssc.start()
+ssc.awaitTermination()
+
+
+============
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
 import org.apache.log4j.Logger
