@@ -1,0 +1,132 @@
+
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.rdd.RDD
+import org.apache.log4j.Logger
+import org.apache.spark.sql.SQLContext
+import sqlContext.implicits._
+import org.apache.spark.streaming.StreamingContext
+import org.apache.spark.streaming.Seconds
+import org.apache.spark.streaming.kafka.KafkaUtils
+import kafka.serializer.StringDecoder
+    import org.apache.spark.{SparkConf, SparkContext}
+    import org.apache.spark.rdd.RDD
+    import org.apache.spark.serializer.{KryoSerializer, KryoRegistrator}
+    import org.apache.log4j.Logger
+    import org.apache.log4j.Level
+    import org.apache.spark.sql.SQLContext
+import sqlContext.implicits._
+import org.apache.spark.streaming.Duration
+
+//  case class LogRecord( clientIp: String, clientIdentity: String, user: String, dateTime: String, request:String,statusCode:Int, bytesSent:Long, referer:String, userAgent:String )
+    
+        val PATTERN = """^(\S+) (\S+) (\S+) \[([\w:/]+\s[+\-]\d{4})\] "(\S+) (\S+) (\S+)" (\d{3}) (\S+) "(\S+)" "([^"]*)"""".r
+     case object ParseFunction {
+        def parseLogLine(log: String): String = {
+          var retstring:String=null
+          try {
+            val res = PATTERN.findFirstMatchIn(log)
+     
+            if (res.isEmpty) {
+              println("Rejected Log Line: " + log)
+              retstring="Empty"
+            }
+            else {
+              val m = res.get
+              retstring=m.group(1)
+              }
+            }
+          catch
+          {
+            case e: Exception =>
+              println("Exception on line:" + log + ":" + e.getMessage);
+              retstring="Empty"
+          }
+         retstring
+        }
+}
+@transient val ssc=new StreamingContext(sc,Seconds(10))
+ssc.checkpoint("checkpoint-directory-consumer")
+@transient val kafkaStream= KafkaUtils.createDirectStream[String,String,StringDecoder,StringDecoder](ssc,Map("metadata.broker.list" -> "localhost:9092" ),"log_test3".split(",").toSet)
+//kafkaStream.map(_._2).saveAsTextFiles("/user/cloudera/ddos/kafka_read_test/","par")
+@transient val logfileRDD=kafkaStream.map(_._2).map(ParseFunction.parseLogLine)
+val logfileCnt=logfileRDD.countByValueAndWindow(Seconds(60),Seconds(30))
+//logfileCnt.saveAsTextFiles("/user/cloudera/ddos/bmp_test")
+logfileCnt.filter{case (a,v) => v>30}.saveAsTextFiles("/user/cloudera/ddos/result_test/","part")
+ssc.start()
+ssc.awaitTermination()
+
+
+
+===========================================
+
+import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.rdd.RDD
+import org.apache.log4j.Logger
+import org.apache.spark.sql.SQLContext
+import sqlContext.implicits._
+import org.apache.spark.streaming.StreamingContext
+//import org.apache.spark.sql.streaming.StreamSQLContext
+import org.apache.spark.streaming.Seconds
+import org.apache.spark.streaming.kafka.KafkaUtils
+import kafka.serializer.StringDecoder
+    import org.apache.spark.{SparkConf, SparkContext}
+    import org.apache.spark.rdd.RDD
+    import org.apache.spark.serializer.{KryoSerializer, KryoRegistrator}
+    import org.apache.log4j.Logger
+    import org.apache.log4j.Level
+    import org.apache.spark.sql.SQLContext
+import sqlContext.implicits._
+import org.apache.spark.streaming.Duration
+
+  case class LogRecord( clientIp: String, clientIdentity: String, user: String, dateTime: String, request:String,statusCode:Int, bytesSent:Long, referer:String, userAgent:String )
+    
+        val PATTERN = """^(\S+) (\S+) (\S+) \[([\w:/]+\s[+\-]\d{4})\] "(\S+) (\S+) (\S+)" (\d{3}) (\S+) "(\S+)" "([^"]*)"""".r
+     
+        def parseLogLine(log: String): LogRecord = {
+          try {
+            val res = PATTERN.findFirstMatchIn(log)
+     
+            if (res.isEmpty) {
+              println("Rejected Log Line: " + log)
+              new LogRecord("Empty", "-", "-", "", "",  -1, -1, "-", "-" )
+            }
+            else {
+              val m = res.get
+              // NOTE:   HEAD does not have a content size.
+              if (m.group(9).equals("-")) {
+                new LogRecord(m.group(1), m.group(2), m.group(3), m.group(4),
+                  m.group(5), m.group(8).toInt, 0, m.group(10), m.group(11))
+              }
+              else {
+                new LogRecord(m.group(1), m.group(2), m.group(3), m.group(4),
+                  m.group(5), m.group(8).toInt, m.group(9).toLong, m.group(10), m.group(11))
+              }
+            }
+          } catch
+          {
+            case e: Exception =>
+              println("Exception on line:" + log + ":" + e.getMessage);
+              new LogRecord("Empty", "-", "-", "", "-", -1, -1, "-", "-" )
+          }
+        }
+@transient val ssc=new StreamingContext(sc,Seconds(30))
+val sqlContext:SQLContext=new org.apache.spark.sql.SQLContext(sc)
+val streamSqlContext=new StreamSQLContext(ssc,sqlContext)
+//ssc.checkpoint("checkpoint-directory-consumer")
+//val kafkaStream= KafkaUtils.createStream(ssc,"localhost:2181","spark-kafka-consumer",Map("log_topic" -> 1))
+@transient val kafkaStream= KafkaUtils.createDirectStream[String,String,StringDecoder,StringDecoder](ssc,Map("metadata.broker.list" -> "localhost:9092" ),"log_test".split(",").toSet)
+//val logfileRDD=kafkaStream.map(_._2).map(parseLogLine)
+@transient val logfileRDD=kafkaStream.map(_._2).map(parseLogLine).map(x=>(x.clientIp,1))
+val logfileCnt=logfileRDD.countByValueAndWindow(Duration(60000L),Duration(30000L))
+logfileCnt.saveAsTextFiles("/user/cloudera/ddos/tmp_test")
+ssc.start()
+ssc.awaitTermination()
+
+
+println("No of messages in current batch interval:",lofileRDD.count())
+logfileRDD.toDF().registerTempTable("logbatch")
+sqlContext.sql("select clientIP from (select clientIp,count(*) as cnt from logbatch group by clientIp)a where cnt>30").write.text("/user/cloudera/ddos/results/")
+
+
+val logfileRDD=kafkaStream.reduceByWindow((str1,str2)=>(str2),Seconds(60),Seconds(30))
+

@@ -1,0 +1,60 @@
+    import org.apache.spark.{SparkConf, SparkContext}
+    import org.apache.spark.rdd.RDD
+    import org.apache.spark.serializer.{KryoSerializer, KryoRegistrator}
+    import org.apache.log4j.Logger
+    import org.apache.log4j.Level
+    import org.apache.spark.sql.SQLContext
+import sqlContext.implicits._
+
+   case class LogRecord( clientIp: String, clientIdentity: String, user: String, dateTime: String, request:String,statusCode:Int, bytesSent:Long, referer:String, userAgent:String )
+    
+        val PATTERN = """^(\S+) (\S+) (\S+) \[([\w:/]+\s[+\-]\d{4})\] "(\S+) (\S+) (\S+)" (\d{3}) (\S+) "(\S+)" "([^"]*)"""".r
+     
+        def parseLogLine(log: String): LogRecord = {
+          try {
+            val res = PATTERN.findFirstMatchIn(log)
+     
+            if (res.isEmpty) {
+              println("Rejected Log Line: " + log)
+              LogRecord("Empty", "-", "-", "", "",  -1, -1, "-", "-" )
+            }
+            else {
+              val m = res.get
+              // NOTE:   HEAD does not have a content size.
+              if (m.group(9).equals("-")) {
+                LogRecord(m.group(1), m.group(2), m.group(3), m.group(4),
+                  m.group(5), m.group(8).toInt, 0, m.group(10), m.group(11))
+              }
+              else {
+                LogRecord(m.group(1), m.group(2), m.group(3), m.group(4),
+                  m.group(5), m.group(8).toInt, m.group(9).toLong, m.group(10), m.group(11))
+              }
+            }
+          } catch
+          {
+            case e: Exception =>
+              println("Exception on line:" + log + ":" + e.getMessage);
+              LogRecord("Empty", "-", "-", "", "-", -1, -1, "-", "-" )
+          }
+        }
+val logfileRaw=sc.textFile("hdfs:///user/cloudera/ddos/apache-access-log.txt")
+val logfileRDD= logfileRaw.map(parseLogLine)
+
+logfileRDD.toDF().registerTempTable("logbatch")
+sqlContext.sql("select clientIP from (select clientIp,count(*) as cnt from logbatch group by clientIp)a where cnt>30").write.text("/user/cloudera/ddos/results3")
+
+
+
+
+val logfilelkupRaw=sc.textFile("hdfs:///user/cloudera/ddos/apache_log_lookup.txt")
+val logfilelkupRDD= logfilelkupRaw.map(parseLogLine)
+
+/* -- join method 
+val logfilelkupgroup = logfilelkupRDD.groupBy(x=>x.clientIp)
+val logfilegroup= logfileRDD.groupBy(x=>x.clientIp)
+logfilegroup.join(logfilelkupgroup).map(t=>t._1).saveAsTextFile("hdfs:///user/cloudera/ddos/results1/")
+*/
+
+
+val attackIpBroadcastList=sc.broadcast(logfilelkupRDD.map(x=>x.clientIp).collect())
+logfileRDD.filter(logrecord=>attackIpBroadcastList.value.contains(logrecord.clientIp)).map(t=>t.clientIp).saveAsTextFile("hdfs:///user/cloudera/ddos/results2")

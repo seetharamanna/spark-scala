@@ -1,0 +1,215 @@
+kafka producer:
+
+
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord, RecordMetadata}
+import org.apache.kafka.clients.producer.ProducerConfig
+import org.apache.spark.streaming.StreamingContext
+import org.apache.spark.streaming.Seconds
+import java.util.HashMap
+val ssc=new StreamingContext(sc,Seconds(1))
+ssc.checkpoint("checkpoint-directory")
+val logfilelkupRaw=ssc.textFileStream("hdfs://quickstart.cloudera:8020/user/cloudera/ddos/input/")
+logfilelkupRaw.foreachRDD(rdd =>
+      rdd.foreachPartition(partition =>
+                partition.foreach{
+                  case x:String=>{
+                    val props = new HashMap[String, Object]()
+                    props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,  "localhost:9092")
+                    props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                      "org.apache.kafka.common.serialization.StringSerializer")
+                    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                      "org.apache.kafka.common.serialization.StringSerializer")
+
+                    println(x)
+                    val producer = new KafkaProducer[String,String](props)
+                    val message=new ProducerRecord[String, String]("log_test4",null,x)
+                    producer.send(message)
+                  }
+
+                }
+      )
+)
+ssc.start()
+ssc.awaitTermination()
+
+
+
+
+
+
+=========================
+import org.apache.kafka.clients.producer.{Callback, ProducerRecord, RecordMetadata}
+import org.apache.log4j.Logger
+import org.apache.spark.TaskContext
+import org.apache.spark.streaming.dstream.DStream
+import org.apache.kafka.clients.producer.KafkaProducer
+
+class KafkaSink(createProducer: () => KafkaProducer[String, String]) extends Serializable {
+
+  lazy val producer = createProducer()
+
+  def send(topic: String, value: String): Unit = producer.send(new ProducerRecord(topic, value))
+}
+
+object KafkaSink {
+  def apply(config: Map[String, Object]): KafkaSink = {
+    val f = () => {
+      val producer = new KafkaProducer[String, String](config)
+
+      sys.addShutdownHook {
+        producer.close()
+      }
+
+      producer
+    }
+    new KafkaSink(f)
+  }
+}
+
+
+ssc.checkpoint("checkpoint-directory")
+val logfilelkupRaw=ssc.textFileStream("hdfs:///user/cloudera/ddos/input")
+logfilelkupRaw.print()
+
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord, RecordMetadata}
+import org.apache.kafka.clients.producer.ProducerConfig
+import org.apache.spark.streaming.StreamingContext
+import org.apache.spark.streaming.Seconds
+import java.util.HashMap
+val ssc=new StreamingContext(sc,Seconds(2))
+ssc.checkpoint("checkpoint-directory")
+val logfilelkupRaw=ssc.textFileStream("hdfs://quickstart.cloudera:8020/user/cloudera/ddos/input/")
+logfilelkupRaw.foreachRDD(rdd =>
+      rdd.foreachPartition(partition =>
+                partition.foreach{
+                  case x:String=>{
+                    val props = new HashMap[String, Object]()
+                    props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,  "localhost:9092")
+                    props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                      "org.apache.kafka.common.serialization.StringSerializer")
+                    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                      "org.apache.kafka.common.serialization.StringSerializer")
+
+                    println(x)
+                    val producer = new KafkaProducer[String,String](props)
+                    val message=new ProducerRecord[String, String]("log_test",null,x)
+                    producer.send(message)
+                  }
+
+                }
+      )
+)
+ssc.start()
+ssc.awaitTermination()
+
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord, RecordMetadata}
+import org.apache.kafka.clients.producer.ProducerConfig
+import org.apache.spark.streaming.StreamingContext
+import org.apache.spark.streaming.Seconds
+val ssc=new StreamingContext(sc,Seconds(1))
+ssc.checkpoint("checkpoint-directory")
+val logfilelkupRaw=ssc.textFileStream("file:/home/cloudera/input/")
+logfilelkupRaw.print()
+ssc.start()
+ssc.awaitTermination()
+
+
+logfilelkupRaw.foreachRDD(rdd =>
+      rdd.foreachPartition(partition =>
+
+                partition.foreach{
+                  case x:String=>{
+
+                    val props = new HashMap[String, Object]()
+                    props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,  "broker1:9092")
+                    props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                      "org.apache.kafka.common.serialization.StringSerializer")
+                    props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                      "org.apache.kafka.common.serialization.StringSerializer")
+
+                    println(x)
+                    val producer = new KafkaProducer[String,String](props)
+                    val message=new ProducerRecord[String, String]("log_test",null,x)
+                    producer.send(message)
+                  }
+
+                }
+      )
+)
+
+
+
+---
+
+
+import java.util.concurrent.Future
+
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord, RecordMetadata}
+
+class MySparkKafkaProducer[K, V](createProducer: () => KafkaProducer[K, V]) extends Serializable {
+
+  /* This is the key idea that allows us to work around running into
+     NotSerializableExceptions. */
+  lazy val producer = createProducer()
+
+  def send(topic: String, key: K, value: V): Future[RecordMetadata] =
+    producer.send(new ProducerRecord[K, V](topic, key, value))
+
+  def send(topic: String, value: V): Future[RecordMetadata] =
+    producer.send(new ProducerRecord[K, V](topic, value))
+
+};object MySparkKafkaProducer {
+
+  import scala.collection.JavaConversions._
+
+  def apply[K, V](config: Map[String, Object]): MySparkKafkaProducer[K, V] = {
+    val createProducerFunc = () => {
+      val producer = new KafkaProducer[K, V](config)
+
+      sys.addShutdownHook {
+        // Ensure that, on executor JVM shutdown, the Kafka producer sends
+        // any buffered messages to Kafka before shutting down.
+        producer.close()
+      }
+
+      producer
+    }
+    new MySparkKafkaProducer(createProducerFunc)
+  }
+
+  def apply[K, V](config: java.util.Properties): MySparkKafkaProducer[K, V] = apply(config.toMap)
+
+}
+
+
+
+import org.apache.kafka.clients.producer.ProducerConfig
+import org.apache.spark.streaming.StreamingContext
+import org.apache.spark.SparkConf
+import org.apache.spark.streaming.Seconds
+import org.apache.spark.broadcast.Broadcast
+import java.util.concurrent.Future
+
+import org.apache.kafka.clients.producer.{KafkaProducer, ProducerRecord, RecordMetadata}
+import java.util.Properties
+
+//val ssc: StreamingContext = {
+  //val sparkConf = new SparkConf().setAppName("spark-streaming-kafka-example").setMaster("local[2]")
+  //new StreamingContext(sparkConf, Seconds(1))
+//}
+
+val ssc=new StreamingContext(sc,Seconds(1))
+
+ssc.checkpoint("checkpoint-directory")
+
+val kafkaProducer: Broadcast[MySparkKafkaProducer[Array[Byte], String]] = {
+  val kafkaProducerConfig = {
+    val p = new Properties()
+    p.setProperty("bootstrap.servers", "broker1:9092")
+    p.setProperty("key.serializer", classOf[ByteArraySerializer].getName)
+    p.setProperty("value.serializer", classOf[StringSerializer].getName)
+    p
+  }
+  ssc.sparkContext.broadcast(MySparkKafkaProducer[Array[Byte], String](kafkaProducerConfig))
+}
+    
